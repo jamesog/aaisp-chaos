@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -10,6 +10,7 @@ import (
 	chaos "github.com/jamesog/aaisp-chaos"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog"
 )
 
 var (
@@ -45,6 +46,7 @@ var (
 
 type broadbandCollector struct {
 	*chaos.API
+	log zerolog.Logger
 }
 
 func (bc broadbandCollector) Describe(ch chan<- *prometheus.Desc) {
@@ -54,7 +56,7 @@ func (bc broadbandCollector) Describe(ch chan<- *prometheus.Desc) {
 func (bc broadbandCollector) Collect(ch chan<- prometheus.Metric) {
 	lines, err := bc.BroadbandInfo()
 	if err != nil {
-		log.Printf("error getting broadband info: %v\n", err)
+		bc.log.Debug().Err(err).Msg("error getting broadband info")
 		scrapeSuccessGauge.Set(0)
 		return
 	}
@@ -87,19 +89,65 @@ func (bc broadbandCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
+func loggingMiddleware(log zerolog.Logger) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		fn := func(w http.ResponseWriter, r *http.Request) {
+			remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				remoteHost = r.RemoteAddr
+			}
+			log.Log().
+				Str("proto", r.Proto).
+				Str("method", r.Method).
+				Str("path", r.URL.Path).
+				Str("remote_addr", remoteHost).
+				Str("user_agent", r.Header.Get("User-Agent")).
+				Send()
+			next.ServeHTTP(w, r)
+		}
+		return http.HandlerFunc(fn)
+	}
+}
+
+func setupLogger(level, output string) zerolog.Logger {
+	ll, err := zerolog.ParseLevel(level)
+	if err != nil {
+		ll = zerolog.InfoLevel
+	}
+
+	log := zerolog.New(os.Stderr).Level(ll).With().Timestamp().Logger()
+
+	switch output {
+	case "console":
+		log = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+	}
+
+	return log
+}
+
 func main() {
-	listen := flag.String("listen", ":8080", "listen `address`")
+	var (
+		listen    = flag.String("listen", ":8080", "listen `address`")
+		logLevel  = flag.String("log.level", "info", "log `level`")
+		logOutput = flag.String("log.output", "json", "log output style (json, console)")
+	)
 	flag.Parse()
+
+	log := setupLogger(*logLevel, *logOutput)
 
 	collector := broadbandCollector{
 		API: chaos.New(chaos.Auth{
 			ControlLogin:    os.Getenv("CHAOS_CONTROL_LOGIN"),
 			ControlPassword: os.Getenv("CHAOS_CONTROL_PASSWORD"),
 		}),
+		log: log,
 	}
+
+	loggedHandler := loggingMiddleware(log)
 
 	prometheus.MustRegister(collector)
 	prometheus.MustRegister(scrapeSuccessGauge)
-	http.Handle("/metrics", promhttp.Handler())
-	log.Fatal(http.ListenAndServe(*listen, nil))
+	http.Handle("/metrics", loggedHandler(promhttp.Handler()))
+	log.Info().Msgf("Listening on %s", *listen)
+	log.Fatal().Err(http.ListenAndServe(*listen, nil)).Send()
 }
