@@ -37,6 +37,10 @@ var (
 		[]string{"line_id"},
 		nil,
 	)
+	scrapeSuccessGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "aaisp_scrape_success",
+		Help: "Displays whether or not the AAISP API scrape was a success",
+	})
 )
 
 type broadbandCollector struct {
@@ -51,8 +55,10 @@ func (bc broadbandCollector) Collect(ch chan<- prometheus.Metric) {
 	lines, err := bc.BroadbandInfo()
 	if err != nil {
 		log.Printf("error getting broadband info: %v\n", err)
+		scrapeSuccessGauge.Set(0)
 		return
 	}
+	scrapeSuccessGauge.Set(1)
 	for _, line := range lines {
 		ch <- prometheus.MustNewConstMetric(
 			broadbandQuotaRemainingDesc,
@@ -93,6 +99,7 @@ func main() {
 	}
 
 	prometheus.MustRegister(collector)
+	prometheus.MustRegister(scrapeSuccessGauge)
 	http.Handle("/metrics", promhttp.Handler())
 	log.Fatal(http.ListenAndServe(*listen, nil))
 }
