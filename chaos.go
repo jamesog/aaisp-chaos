@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -55,6 +56,14 @@ func (a Auth) form() url.Values {
 	return f
 }
 
+func userAgent() string {
+	return fmt.Sprintf("chaos-go (%s; %s; %s) github.com/jamesog/aaisp-chaos",
+		runtime.GOOS,
+		runtime.GOARCH,
+		runtime.Version(),
+	)
+}
+
 func (api API) makeRequest(url string) ([]byte, error) {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
@@ -64,6 +73,7 @@ func (api API) makeRequest(url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", userAgent())
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := client.Do(req)
 	if err != nil {
