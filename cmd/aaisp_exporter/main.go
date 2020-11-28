@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -109,6 +110,24 @@ func loggingMiddleware(log zerolog.Logger) func(next http.Handler) http.Handler 
 	}
 }
 
+func usage(fs *flag.FlagSet) func() {
+	return func() {
+		o := fs.Output()
+		fmt.Fprintf(o, "Usage:\n    %s ", os.Args[0])
+		fs.VisitAll(func(f *flag.Flag) {
+			s := fmt.Sprintf(" [-%s", f.Name)
+			if arg, _ := flag.UnquoteUsage(f); len(arg) > 0 {
+				s += " " + arg
+			}
+			s += "]"
+			fmt.Fprint(o, s)
+		})
+		fmt.Fprint(o, "\n\nOptions:\n")
+		fs.PrintDefaults()
+		fmt.Fprint(o, "\nThe environment variables CHAOS_CONTROL_LOGIN and CHAOS_CONTROL_PASSWORD must be set.\n")
+	}
+}
+
 func setupLogger(level, output string) zerolog.Logger {
 	ll, err := zerolog.ParseLevel(level)
 	if err != nil {
@@ -126,19 +145,34 @@ func setupLogger(level, output string) zerolog.Logger {
 }
 
 func main() {
+	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	fs.Usage = usage(fs)
 	var (
-		listen    = flag.String("listen", ":8080", "listen `address`")
-		logLevel  = flag.String("log.level", "info", "log `level`")
-		logOutput = flag.String("log.output", "json", "log output style (json, console)")
+		listen    = fs.String("listen", ":8080", "listen `address`")
+		logLevel  = fs.String("log.level", "info", "log `level`")
+		logOutput = fs.String("log.output", "json", "log output `style` (json, console)")
 	)
-	flag.Parse()
+	fs.Parse(os.Args[1:])
 
 	log := setupLogger(*logLevel, *logOutput)
 
+	var (
+		controlLogin    = os.Getenv("CHAOS_CONTROL_LOGIN")
+		controlPassword = os.Getenv("CHAOS_CONTROL_PASSWORD")
+	)
+	switch {
+	case controlLogin == "" && controlPassword == "":
+		log.Fatal().Msg("CHAOS_CONTROL_LOGIN and CHAOS_CONTROL_PASSWORD must be set in the environment")
+	case controlLogin == "":
+		log.Fatal().Msg("CHAOS_CONTROL_LOGIN is not set")
+	case controlPassword == "":
+		log.Fatal().Msg("CHAOS_CONTROL_PASSWORD is not set")
+	}
+
 	collector := broadbandCollector{
 		API: chaos.New(chaos.Auth{
-			ControlLogin:    os.Getenv("CHAOS_CONTROL_LOGIN"),
-			ControlPassword: os.Getenv("CHAOS_CONTROL_PASSWORD"),
+			ControlLogin:    controlLogin,
+			ControlPassword: controlPassword,
 		}),
 		log: log,
 	}
